@@ -7,7 +7,7 @@ import json
 import threading
 from pathlib import Path
 import time
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageEnhance
 import io
 
 class AdvancedEdenAIGUI:
@@ -31,8 +31,10 @@ class AdvancedEdenAIGUI:
                 y = (self.root.winfo_screenheight() - 900) // 2
                 self.root.geometry(f"1400x900+{x}+{y}")
         
+        # API Key fija (oculta del frontend)
+        self.api_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMWFmZmYzNzEtZjAxOS00MzAyLTgyMTctODZmOTYxM2IyYjAwIiwidHlwZSI6ImFwaV90b2tlbiJ9.aTxgNluJ6eO9LtWfiRpXo13xhTw7bE5bL6HnCd8koPY"
+        
         # Variables
-        self.api_key = tk.StringVar(value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMWFmZmYzNzEtZjAxOS00MzAyLTgyMTctODZmOTYxM2IyYjAwIiwidHlwZSI6ImFwaV90b2tlbiJ9.aTxgNluJ6eO9LtWfiRpXo13xhTw7bE5bL6HnCd8koPY")
         self.current_folder = tk.StringVar()
         self.progress_var = tk.DoubleVar()
         self.status_var = tk.StringVar(value="Sistema listo - Selecciona carpeta e imágenes")
@@ -42,8 +44,13 @@ class AdvancedEdenAIGUI:
         self.selected_images = set()
         self.thumbnails_cache = {}
         self.results_cache = {}
-        self.detected_faces = []  # Nueva lista para caras detectadas
-        self.face_identifications = {}  # Base de datos de identificaciones {face_id: name}
+        self.detected_faces = []
+        self.face_identifications = {}
+        
+        # Variables para ajustes de imagen
+        self.brightness_var = tk.DoubleVar(value=1.0)
+        self.contrast_var = tk.DoubleVar(value=1.0)
+        self.gamma_var = tk.DoubleVar(value=1.0)
         
         # Configurar estilo
         self.setup_style()
@@ -62,13 +69,13 @@ class AdvancedEdenAIGUI:
         # Estilo personalizado para el árbol de carpetas
         style.configure("Custom.Treeview", 
                        font=('Arial', 10),
-                       rowheight=28,  # Altura de cada fila
+                       rowheight=28,
                        fieldbackground='white',
                        background='white')
         style.configure("Custom.Treeview.Heading", 
                        font=('Arial', 10, 'bold'))
         
-        # Estilo para la tabla de resultados también
+        # Estilo para la tabla de resultados
         style.configure("Results.Treeview",
                        font=('Arial', 9),
                        rowheight=24)
@@ -80,7 +87,7 @@ class AdvancedEdenAIGUI:
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Panel izquierdo: Explorador y configuración
+        # Panel izquierdo: Explorador y controles
         left_frame = ttk.Frame(main_paned, width=350)
         main_paned.add(left_frame, weight=0)
         
@@ -92,17 +99,47 @@ class AdvancedEdenAIGUI:
         self.create_right_panels(right_paned)
         
     def create_left_panel(self, parent):
-        # Configuración de API
-        config_frame = ttk.LabelFrame(parent, text="Configuración", padding="10")
-        config_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Controles de reconocimiento facial (movido arriba)
+        face_frame = ttk.LabelFrame(parent, text="Reconocimiento Facial", padding="10")
+        face_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(config_frame, text="API Key Eden AI:", style='Header.TLabel').pack(anchor=tk.W)
-        api_entry = ttk.Entry(config_frame, textvariable=self.api_key, width=40, show="*", state="readonly")
-        api_entry.pack(fill=tk.X, pady=(0, 5))
+        # Información de selección
+        self.selection_info = ttk.Label(face_frame, text="0 imágenes seleccionadas")
+        self.selection_info.pack(anchor=tk.W, pady=(0, 5))
         
-        # Estado de API (siempre válida ahora)
-        self.api_status_label = ttk.Label(config_frame, text="API Key configurada", style='Success.TLabel')
-        self.api_status_label.pack(anchor=tk.W, pady=(0, 10))
+        # Opciones de procesamiento
+        options_frame = ttk.Frame(face_frame)
+        options_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.save_results = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="Guardar resultados JSON", variable=self.save_results).pack(anchor=tk.W)
+        
+        self.auto_open_results = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="Abrir resultados automáticamente", variable=self.auto_open_results).pack(anchor=tk.W)
+        
+        # Botones de procesamiento
+        buttons_frame = ttk.Frame(face_frame)
+        buttons_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.detect_btn = ttk.Button(buttons_frame, text="Detectar Rostros", 
+                                    command=self.start_face_detection, style='Title.TLabel')
+        self.detect_btn.pack(fill=tk.X, pady=(0, 5))
+        
+        self.add_faces_btn = ttk.Button(buttons_frame, text="Agregar Caras a Lista", 
+                                       command=self.add_faces_to_list, state='disabled')
+        self.add_faces_btn.pack(fill=tk.X)
+        
+        # Barra de progreso
+        progress_frame = ttk.Frame(face_frame)
+        progress_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Label(progress_frame, text="Progreso:").pack(side=tk.LEFT)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        
+        # Estado
+        self.status_label = ttk.Label(face_frame, textvariable=self.status_var, wraplength=300)
+        self.status_label.pack(anchor=tk.W, pady=(5, 0))
         
         # Explorador de carpetas
         explorer_frame = ttk.LabelFrame(parent, text="Explorador de Carpetas", padding="10")
@@ -140,48 +177,15 @@ class AdvancedEdenAIGUI:
         self.folder_tree.bind('<<TreeviewSelect>>', self.on_folder_select)
         self.folder_tree.bind('<Double-Button-1>', self.on_folder_double_click)
         
-        # Controles de procesamiento
-        control_frame = ttk.LabelFrame(parent, text="Control de Procesamiento", padding="10")
-        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Controles de selección de imágenes
+        selection_frame = ttk.LabelFrame(parent, text="Selección de Imágenes", padding="10")
+        selection_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Botones de selección
-        selection_frame = ttk.Frame(control_frame)
-        selection_frame.pack(fill=tk.X, pady=(0, 5))
+        buttons_sel_frame = ttk.Frame(selection_frame)
+        buttons_sel_frame.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Button(selection_frame, text="Seleccionar Todo", command=self.select_all_images).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(selection_frame, text="Deseleccionar", command=self.clear_selection).pack(side=tk.LEFT)
-        
-        # Información de selección
-        self.selection_info = ttk.Label(control_frame, text="0 imágenes seleccionadas")
-        self.selection_info.pack(anchor=tk.W, pady=(0, 5))
-        
-        # Opciones de procesamiento
-        self.save_results = tk.BooleanVar(value=True)
-        ttk.Checkbutton(control_frame, text="Guardar resultados JSON", variable=self.save_results).pack(anchor=tk.W)
-        
-        self.auto_open_results = tk.BooleanVar(value=True)
-        ttk.Checkbutton(control_frame, text="Abrir resultados automáticamente", variable=self.auto_open_results).pack(anchor=tk.W)
-        
-        # Botones de procesamiento
-        self.detect_btn = ttk.Button(control_frame, text="Detectar Rostros", 
-                                    command=self.start_face_detection, style='Title.TLabel')
-        self.detect_btn.pack(fill=tk.X, pady=(10, 5))
-        
-        self.add_faces_btn = ttk.Button(control_frame, text="Agregar Caras a Lista", 
-                                       command=self.add_faces_to_list, state='disabled')
-        self.add_faces_btn.pack(fill=tk.X, pady=(0, 5))
-        
-        # Barra de progreso
-        progress_frame = ttk.Frame(control_frame)
-        progress_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        ttk.Label(progress_frame, text="Progreso:").pack(side=tk.LEFT)
-        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
-        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
-        
-        # Estado
-        self.status_label = ttk.Label(control_frame, textvariable=self.status_var, wraplength=300)
-        self.status_label.pack(anchor=tk.W, pady=(5, 0))
+        ttk.Button(buttons_sel_frame, text="Seleccionar Todo", command=self.select_all_images).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(buttons_sel_frame, text="Deseleccionar", command=self.clear_selection).pack(side=tk.LEFT)
         
         # Inicializar explorador
         self.initialize_explorer()
@@ -211,10 +215,9 @@ class AdvancedEdenAIGUI:
         
         # Eventos del canvas
         self.canvas.bind('<Configure>', self.on_canvas_configure)
-        # Scroll compatible con Linux
-        self.canvas.bind('<MouseWheel>', self.on_mousewheel)  # Windows/macOS
-        self.canvas.bind('<Button-4>', self.on_mousewheel)    # Linux scroll up
-        self.canvas.bind('<Button-5>', self.on_mousewheel)    # Linux scroll down
+        self.canvas.bind('<MouseWheel>', self.on_mousewheel)
+        self.canvas.bind('<Button-4>', self.on_mousewheel)
+        self.canvas.bind('<Button-5>', self.on_mousewheel)
         
         # Panel inferior: Resultados detallados
         results_frame = ttk.LabelFrame(parent, text="Resultados Detallados", padding="10")
@@ -323,7 +326,7 @@ class AdvancedEdenAIGUI:
                             'bounding_box': face_data.get('bounding_box', {}),
                             'landmarks': face_data.get('landmarks', {}),
                             'attributes': face_data.get('attributes', {}),
-                            'face_id': f"{image_path.name}_{len(self.detected_faces)}"  # ID único para cada cara
+                            'face_id': f"{image_path.name}_{len(self.detected_faces)}"
                         }
                         self.detected_faces.append(face_info)
                     
@@ -335,7 +338,7 @@ class AdvancedEdenAIGUI:
                 self.root.after(0, self.add_result_to_table, i+1, image_path.name, 
                               faces_count, confidence, status, f"{size_mb} MB")
                 
-                time.sleep(0.3)  # Pausa más corta
+                time.sleep(0.3)
                 
             # Completar detección
             self.progress_var.set(100)
@@ -360,7 +363,7 @@ class AdvancedEdenAIGUI:
             self.status_var.set(f"Error en detección: {str(e)}")
         finally:
             self.root.after(0, lambda: self.detect_btn.config(state='normal'))
-            
+    
     def add_faces_to_list(self):
         """Agregar caras detectadas a una lista de gestión"""
         if not self.detected_faces:
@@ -455,7 +458,7 @@ class AdvancedEdenAIGUI:
 Imágenes con rostros: {images_with_faces} | Promedio por imagen: {avg_faces_per_image:.1f} rostros"""
         
         ttk.Label(stats_frame, text=stats_text, font=('Arial', 9)).pack(anchor=tk.W)
-        
+    
     def export_faces_list(self):
         """Exportar lista de caras a archivo JSON"""
         try:
@@ -834,7 +837,7 @@ Calidad de Detección:
         
     def process_single_image(self, image_path):
         try:
-            headers = {"Authorization": f"Bearer {self.api_key.get()}"}
+            headers = {"Authorization": f"Bearer {self.api_key}"}
             
             with open(image_path, 'rb') as image_file:
                 files = {'file': image_file}
@@ -891,16 +894,108 @@ Calidad de Detección:
         except Exception as e:
             messagebox.showerror("Error", f"Error guardando resultados: {str(e)}")
             
+    def apply_image_adjustments(self, image):
+        """Aplicar ajustes de brillo, contraste y gamma a la imagen"""
+        # Aplicar brillo
+        if self.brightness_var.get() != 1.0:
+            enhancer = ImageEnhance.Brightness(image)
+            image = enhancer.enhance(self.brightness_var.get())
+        
+        # Aplicar contraste
+        if self.contrast_var.get() != 1.0:
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(self.contrast_var.get())
+        
+        # Aplicar corrección gamma (simulada con ajuste de color)
+        if self.gamma_var.get() != 1.0:
+            # Simulación de gamma usando ajuste de color
+            gamma_factor = 1.0 / self.gamma_var.get()
+            enhancer = ImageEnhance.Color(image)
+            image = enhancer.enhance(gamma_factor)
             
-    def run(self):
-        self.root.mainloop()
-
+        return image
+    
+    def print_image_a5(self):
+        """Imprimir imagen actual en formato A5"""
+        if not hasattr(self, 'current_image_path') or not self.current_image_path:
+            messagebox.showwarning("Sin imagen", "No hay imagen cargada para imprimir")
+            return
+            
+        try:
+            # Cargar imagen original
+            with Image.open(self.current_image_path) as img:
+                # Aplicar ajustes actuales
+                adjusted_img = self.apply_image_adjustments(img.copy())
+                
+                # Configurar para impresión A5 (148x210 mm a 300 DPI)
+                # A5 en píxeles: 1748x2480 a 300 DPI
+                a5_width = 1748
+                a5_height = 2480
+                
+                # Calcular ratio para mantener proporción
+                img_ratio = adjusted_img.width / adjusted_img.height
+                a5_ratio = a5_width / a5_height
+                
+                if img_ratio > a5_ratio:
+                    # Imagen más ancha que A5, ajustar por ancho
+                    new_width = a5_width
+                    new_height = int(a5_width / img_ratio)
+                else:
+                    # Imagen más alta que A5, ajustar por alto
+                    new_height = a5_height
+                    new_width = int(a5_height * img_ratio)
+                
+                # Redimensionar imagen
+                print_img = adjusted_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Crear imagen A5 con fondo blanco
+                a5_img = Image.new('RGB', (a5_width, a5_height), 'white')
+                
+                # Centrar imagen en A5
+                x_offset = (a5_width - new_width) // 2
+                y_offset = (a5_height - new_height) // 2
+                a5_img.paste(print_img, (x_offset, y_offset))
+                
+                # Guardar temporalmente para imprimir
+                temp_file = Path(self.current_folder.get()) / f"temp_print_{int(time.time())}.png"
+                a5_img.save(temp_file, 'PNG', dpi=(300, 300))
+                
+                # Mostrar diálogo de confirmación
+                result = messagebox.askyesno(
+                    "Imprimir en A5", 
+                    f"Imagen preparada para impresión A5 (148x210mm)\n"
+                    f"Resolución: 300 DPI\n"
+                    f"Archivo temporal: {temp_file.name}\n\n"
+                    f"¿Desea abrir el archivo para imprimir?"
+                )
+                
+                if result:
+                    # Abrir archivo para impresión
+                    try:
+                        os.system(f'xdg-open "{temp_file}"')  # Linux
+                    except:
+                        try:
+                            os.system(f'open "{temp_file}"')  # macOS
+                        except:
+                            try:
+                                os.startfile(temp_file)  # Windows
+                            except:
+                                messagebox.showinfo("Archivo listo", f"Archivo guardado en:\n{temp_file}")
+                else:
+                    # Eliminar archivo temporal si no se va a usar
+                    temp_file.unlink()
+                
+                messagebox.showinfo("Éxito", "Imagen preparada para impresión A5")
+                
+        except Exception as e:
+            messagebox.showerror("Error de impresión", f"Error preparando imagen para impresión: {str(e)}")
+            
     def open_image_viewer(self, image_path):
-        """Abrir visor de imagen grande con detección de rostros interactiva"""
+        """Abrir visor de imagen grande con controles mejorados"""
         # Crear ventana del visor
         viewer_window = tk.Toplevel(self.root)
         viewer_window.title(f"Visor de Imagen - {Path(image_path).name}")
-        viewer_window.geometry("1000x800")
+        viewer_window.geometry("1200x900")
         viewer_window.transient(self.root)
         
         # Variables para el visor
@@ -928,10 +1023,63 @@ Calidad de Detección:
         ttk.Button(controls_frame, text="Zoom -", command=lambda: self.zoom_image(viewer_window, 0.8)).pack(side=tk.LEFT, padx=2)
         ttk.Button(controls_frame, text="Ajustar", command=lambda: self.fit_image(viewer_window)).pack(side=tk.LEFT, padx=2)
         ttk.Button(controls_frame, text="Detectar Rostros", command=lambda: self.detect_faces_in_viewer(viewer_window)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(controls_frame, text="Imprimir A5", command=self.print_image_a5).pack(side=tk.LEFT, padx=5)
+        
+        # Panel de controles de imagen
+        image_controls_frame = ttk.LabelFrame(main_frame, text="Ajustes de Imagen", padding="10")
+        image_controls_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Controles de ajuste
+        controls_grid = ttk.Frame(image_controls_frame)
+        controls_grid.pack(fill=tk.X)
+        
+        # Brillo
+        ttk.Label(controls_grid, text="Brillo:").grid(row=0, column=0, sticky='w', padx=(0, 5))
+        brightness_scale = ttk.Scale(controls_grid, from_=0.1, to=3.0, variable=self.brightness_var, 
+                                   orient=tk.HORIZONTAL, length=150,
+                                   command=lambda v: self.update_image_display(viewer_window))
+        brightness_scale.grid(row=0, column=1, sticky='ew', padx=5)
+        self.brightness_label = ttk.Label(controls_grid, text="1.0")
+        self.brightness_label.grid(row=0, column=2, padx=(5, 20))
+        
+        # Contraste
+        ttk.Label(controls_grid, text="Contraste:").grid(row=0, column=3, sticky='w', padx=(0, 5))
+        contrast_scale = ttk.Scale(controls_grid, from_=0.1, to=3.0, variable=self.contrast_var,
+                                 orient=tk.HORIZONTAL, length=150,
+                                 command=lambda v: self.update_image_display(viewer_window))
+        contrast_scale.grid(row=0, column=4, sticky='ew', padx=5)
+        self.contrast_label = ttk.Label(controls_grid, text="1.0")
+        self.contrast_label.grid(row=0, column=5, padx=(5, 20))
+        
+        # Gamma
+        ttk.Label(controls_grid, text="Gamma:").grid(row=1, column=0, sticky='w', padx=(0, 5), pady=(10, 0))
+        gamma_scale = ttk.Scale(controls_grid, from_=0.1, to=3.0, variable=self.gamma_var,
+                              orient=tk.HORIZONTAL, length=150,
+                              command=lambda v: self.update_image_display(viewer_window))
+        gamma_scale.grid(row=1, column=1, sticky='ew', padx=5, pady=(10, 0))
+        self.gamma_label = ttk.Label(controls_grid, text="1.0")
+        self.gamma_label.grid(row=1, column=2, padx=(5, 20), pady=(10, 0))
+        
+        # Botones de reseteo
+        reset_frame = ttk.Frame(controls_grid)
+        reset_frame.grid(row=1, column=3, columnspan=3, padx=(20, 0), pady=(10, 0), sticky='ew')
+        
+        ttk.Button(reset_frame, text="Reset Ajustes", 
+                  command=lambda: self.reset_image_adjustments(viewer_window)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(reset_frame, text="Guardar Imagen Ajustada", 
+                  command=self.save_adjusted_image).pack(side=tk.LEFT, padx=5)
+        
+        # Configurar grid para que se expanda
+        controls_grid.grid_columnconfigure(1, weight=1)
+        controls_grid.grid_columnconfigure(4, weight=1)
+        
+        # Frame para imagen y controles laterales
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
         
         # Canvas para la imagen
-        canvas_frame = ttk.Frame(main_frame)
-        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        canvas_frame = ttk.Frame(content_frame)
+        canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
         self.viewer_canvas = tk.Canvas(canvas_frame, bg='gray20', cursor='crosshair')
         h_scrollbar = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.viewer_canvas.xview)
@@ -944,8 +1092,8 @@ Calidad de Detección:
         h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
         
         # Info panel lateral
-        info_frame = ttk.LabelFrame(main_frame, text="Información de Rostros", width=300)
-        info_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        info_frame = ttk.LabelFrame(content_frame, text="Información de Rostros", width=300)
+        info_frame.pack(side=tk.RIGHT, fill=tk.Y)
         info_frame.pack_propagate(False)
         
         self.faces_listbox = tk.Listbox(info_frame, height=15)
@@ -971,8 +1119,13 @@ Calidad de Detección:
         # Eventos del canvas
         self.viewer_canvas.bind('<Button-1>', lambda e: self.on_face_click(e, viewer_window))
         self.viewer_canvas.bind('<B1-Motion>', self.on_pan_drag)
-        self.viewer_canvas.bind('<ButtonPress-2>', self.on_pan_start)  # Botón medio
+        self.viewer_canvas.bind('<ButtonPress-2>', self.on_pan_start)
         self.viewer_canvas.bind('<B2-Motion>', self.on_pan_drag)
+        
+        # Bind para actualizar etiquetas de valores
+        self.brightness_var.trace('w', lambda *args: self.update_control_labels())
+        self.contrast_var.trace('w', lambda *args: self.update_control_labels())
+        self.gamma_var.trace('w', lambda *args: self.update_control_labels())
         
         # Cargar y mostrar imagen
         self.load_image_in_viewer(viewer_window)
@@ -980,6 +1133,58 @@ Calidad de Detección:
         # Si ya hay rostros detectados, mostrarlos
         self.update_faces_display(viewer_window)
         
+    def update_control_labels(self):
+        """Actualizar etiquetas de valores de controles"""
+        if hasattr(self, 'brightness_label'):
+            self.brightness_label.config(text=f"{self.brightness_var.get():.1f}")
+        if hasattr(self, 'contrast_label'):
+            self.contrast_label.config(text=f"{self.contrast_var.get():.1f}")
+        if hasattr(self, 'gamma_label'):
+            self.gamma_label.config(text=f"{self.gamma_var.get():.1f}")
+    
+    def reset_image_adjustments(self, viewer_window):
+        """Resetear todos los ajustes de imagen"""
+        self.brightness_var.set(1.0)
+        self.contrast_var.set(1.0)
+        self.gamma_var.set(1.0)
+        self.update_image_display(viewer_window)
+        
+    def save_adjusted_image(self):
+        """Guardar imagen con ajustes aplicados"""
+        if not hasattr(self, 'current_image_path') or not self.current_image_path:
+            messagebox.showwarning("Sin imagen", "No hay imagen cargada")
+            return
+            
+        try:
+            # Seleccionar archivo de destino
+            original_path = Path(self.current_image_path)
+            suggested_name = f"{original_path.stem}_ajustada{original_path.suffix}"
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=original_path.suffix,
+                filetypes=[
+                    ("JPEG files", "*.jpg"),
+                    ("PNG files", "*.png"),
+                    ("All files", "*.*")
+                ],
+                title="Guardar imagen ajustada",
+                initialfilename=suggested_name
+            )
+            
+            if filename:
+                # Cargar imagen original
+                with Image.open(self.current_image_path) as img:
+                    # Aplicar ajustes
+                    adjusted_img = self.apply_image_adjustments(img.copy())
+                    
+                    # Guardar imagen
+                    adjusted_img.save(filename)
+                    
+                messagebox.showinfo("Éxito", f"Imagen ajustada guardada en:\n{filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Error guardando imagen ajustada: {str(e)}")
+            
     def load_image_in_viewer(self, viewer_window):
         """Cargar imagen en el visor"""
         try:
@@ -1007,7 +1212,7 @@ Calidad de Detección:
         img_width, img_height = self.original_image.size
         zoom_w = canvas_width / img_width
         zoom_h = canvas_height / img_height
-        self.zoom_level = min(zoom_w, zoom_h) * 0.9  # 90% para dejar margen
+        self.zoom_level = min(zoom_w, zoom_h) * 0.9
         
         self.pan_x = 0
         self.pan_y = 0
@@ -1016,19 +1221,22 @@ Calidad de Detección:
     def zoom_image(self, viewer_window, factor):
         """Hacer zoom en la imagen"""
         self.zoom_level *= factor
-        self.zoom_level = max(0.1, min(self.zoom_level, 10.0))  # Limitar zoom
+        self.zoom_level = max(0.1, min(self.zoom_level, 10.0))
         self.update_image_display(viewer_window)
         
     def update_image_display(self, viewer_window):
-        """Actualizar visualización de la imagen con rostros"""
+        """Actualizar visualización de la imagen con rostros y ajustes"""
         if not hasattr(self, 'original_image'):
             return
             
-        # Redimensionar imagen
-        img_width = int(self.original_image.width * self.zoom_level)
-        img_height = int(self.original_image.height * self.zoom_level)
+        # Aplicar ajustes a la imagen original
+        adjusted_image = self.apply_image_adjustments(self.original_image.copy())
         
-        display_image = self.original_image.resize((img_width, img_height), Image.Resampling.LANCZOS)
+        # Redimensionar imagen
+        img_width = int(adjusted_image.width * self.zoom_level)
+        img_height = int(adjusted_image.height * self.zoom_level)
+        
+        display_image = adjusted_image.resize((img_width, img_height), Image.Resampling.LANCZOS)
         
         # Convertir a PhotoImage
         self.photo = ImageTk.PhotoImage(display_image)
@@ -1061,7 +1269,7 @@ Calidad de Detección:
             x2 = x1 + (bbox.get('width', 0) * self.zoom_level)
             y2 = y1 + (bbox.get('height', 0) * self.zoom_level)
             
-            # Color del rectángulo (verde si identificado, rojo si no)
+            # Color del rectángulo
             face_id = face['face_id']
             color = 'lime' if face_id in self.face_identifications else 'red'
             
@@ -1251,7 +1459,7 @@ Calidad de Detección:
             self.pan_y += dy
             
             self.viewer_canvas.move(self.image_item, dx, dy)
-            self.viewer_canvas.move("face", dx, dy)  # Mover también los rostros
+            self.viewer_canvas.move("face", dx, dy)
             
             self.last_x = event.x
             self.last_y = event.y
@@ -1282,6 +1490,9 @@ Calidad de Detección:
             print(f"Error cargando identificaciones: {e}")
             self.face_identifications = {}
 
+    def run(self):
+        self.root.mainloop()
+
 if __name__ == "__main__":
     try:
         app = AdvancedEdenAIGUI()
@@ -1290,3 +1501,4 @@ if __name__ == "__main__":
         print("Error: Falta instalar dependencias.")
         print("Ejecuta: pip install pillow requests")
         print(f"Error específico: {e}")
+                
