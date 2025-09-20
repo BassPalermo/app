@@ -1,0 +1,22 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - run: pip install pyinstaller pillow requests
+    - run: pyinstaller --onefile --windowed --name="Eden_AI_Facial_Recognition" app6.py
+    - uses: actions/upload-artifact@v4
+      with:
+        name: executable
+        path: dist/Eden_AI_Facial_Recognition.exe
